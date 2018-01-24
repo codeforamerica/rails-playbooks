@@ -1,0 +1,330 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: no
+
+  tasks:
+    - name: "Create {{ project_slug }} VPC"
+      ec2_vpc_net:
+        state: present
+        name: "{{ project_slug }}-vpc"
+        region: "{{ region }}"
+        cidr_block: 10.0.0.0/16
+        resource_tags:
+          Name: "{{ project_slug }}_vpc"
+      register: vpc
+
+    - name: "Create {{ project_slug }} public subnet"
+      ec2_vpc_subnet:
+        state: present
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        az: "{{ az }}"
+        cidr: 10.0.0.0/24
+        resource_tags:
+          Name: "{{ project_slug }}_subnet_public"
+          Type: "public"
+      register: subnet_public
+
+    - name: "Create {{ project_slug }} public subnet2"
+      ec2_vpc_subnet:
+        state: present
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        az: "{{ az2 }}"
+        cidr: 10.0.1.0/24
+        resource_tags:
+          Name: "{{ project_slug }}_subnet_public2"
+          Type: "public"
+      register: subnet_public2
+
+    - name: "Create IGW"
+      ec2_vpc_igw:
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        state: present
+      register: igw
+
+    - name: Set up public subnet route table
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        tags:
+          Name: "{{ project_slug }}_public_route"
+        subnets:
+          - "{{ subnet_public.subnet.id }}"
+          - "{{ subnet_public2.subnet.id }}"
+
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ igw.gateway_id }}"
+      register: public_route_table
+
+    - name: Create  NACL for public subjects
+      ec2_vpc_nacl:
+        vpc_id: "{{ vpc.vpc.id }}"
+        name: "{{ project_slug }}-nacl-public"
+        region: "{{ region }}"
+        subnets: ["{{ project_slug }}_subnet_public", "{{ project_slug }}_subnet_public2"]
+
+        ingress: [
+            # rule no, protocol, allow/deny, cidr, icmp_code, icmp_type,
+            #                                             port from, port to
+            [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
+        ]
+        egress: [
+            [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
+        ]
+        state: 'present'
+
+    - name: Create private subnet
+      ec2_vpc_subnet:
+        state: present
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        az: "{{ az }}"
+        cidr: 10.0.2.0/24
+        resource_tags:
+          Name: "{{ project_slug }}_subnet_private"
+          Type: "private"
+      register: "subnet_private"
+
+    - name: Create private subnet2
+      ec2_vpc_subnet:
+        state: present
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        az: "{{ az2 }}"
+        cidr: 10.0.3.0/24
+        resource_tags:
+          Name: "{{ project_slug }}_subnet_private2"
+          Type: "private"
+      register: "subnet_private2"
+
+    - name: Create  NACL for private subnets
+      ec2_vpc_nacl:
+        vpc_id: "{{ vpc.vpc.id }}"
+        name: "{{ project_slug }}-nacl-private"
+        region: "{{ region }}"
+        subnets: ["{{ project_slug }}_subnet_private", "{{ project_slug }}_subnet_private2"]
+
+        ingress: [
+            # rule no, protocol, allow/deny, cidr, icmp_code, icmp_type,
+            #                                             port from, port to
+            [100, 'all', 'deny', '0.0.0.0/0', null, null, null, null]
+        ]
+        egress: [
+            [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
+        ]
+        state: 'present'
+
+
+    - name: Create RDS subnet group
+      rds_subnet_group:
+        region: "{{ region }}"
+        state: present
+        name: "{{ project_slug }}-rds-subnet-group"
+        description: "Database subnet for {{ project_slug }} instance of {{ project }}"
+        subnets:
+          - "{{ subnet_public.subnet.id }}"
+          - "{{ subnet_public2.subnet.id }}"
+      register: "rds_subnet_group"
+
+    - name: Create database security group
+      ec2_group:
+        name: "{{ project_slug }}-rds-security-group"
+        description: an example EC2 group
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        state: present
+        rules:
+          - proto: tcp
+            from_port: 5432
+            to_port: 5432
+            cidr_ip: 0.0.0.0/0
+      register: "rds_sg"
+
+    - name: Create S3 bucket for application media
+      s3_bucket:
+        name: "{{ project_slug }}-media-files"
+        state: present
+        versioning: no
+
+    - name: Create S3 bucket for application static files
+      s3_bucket:
+        name: "{{ project_slug }}-static-files"
+        state: present
+        versioning: no
+        policy: >
+          {
+            "Version":"2012-10-17",
+            "Statement":[{
+              "Sid":"PublicReadGetObject",
+                  "Effect":"Allow",
+                "Principal": "*",
+                "Action":["s3:GetObject"],
+                "Resource":["arn:aws:s3:::{{ project_slug }}-static-files/*"
+                ]
+              }
+            ]
+          }
+
+    - name: Create S3 User for Application
+      iam:
+        iam_type: user
+        name: "{{ project_slug }}-s3-user"
+        state: present
+      register: s3_user
+
+    - name: Create S3 permission for application user on static bucket
+      iam_policy:
+        policy_name: "{{ project_slug }}-s3-static-policy"
+        iam_name: "{{ project_slug }}-s3-user"
+        iam_type: user
+        state: present
+        region: "{{ region }}"
+        policy_json: >
+          {
+              "Statement": [
+                  {
+                      "Action": [
+                          "s3:ListBucket",
+                          "s3:GetBucketLocation",
+                          "s3:ListBucketMultipartUploads",
+                          "s3:ListBucketVersions"
+                      ],
+                      "Effect": "Allow",
+                      "Resource": [
+                          "arn:aws:s3:::{{ project_slug }}-static-files"
+                      ]
+                  },
+                  {
+                      "Action": [
+                          "s3:*Object*",
+                          "s3:ListMultipartUploadParts",
+                          "s3:AbortMultipartUpload"
+                      ],
+                      "Effect": "Allow",
+                      "Resource": [
+                          "arn:aws:s3:::{{ project_slug }}-static-files/*"
+                      ]
+                  }
+              ],
+              "Version": "2012-10-17"
+          }
+
+    - name: Set CORS on S3 bucket
+      command: >
+        aws s3api put-bucket-cors --bucket {{ project_slug }}-static-files  --cors-configuration '{ "CORSRules": [ { "AllowedHeaders": [ "Authorization" ], "AllowedMethods": [ "GET" ], "AllowedOrigins": [ "https://{{ domain }}" ], "MaxAgeSeconds": 3000 } ] }'
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ lookup('env','AWS_ACCESS_KEY_ID') }}"
+        AWS_SECRET_ACCESS_KEY: "{{ lookup('env','AWS_SECRET_ACCESS_KEY') }}"
+        PYTHONPATH: "python3.5"
+
+    - name: Create S3 permission for application user on media bucket
+      iam_policy:
+        policy_name: "{{ project_slug }}-s3-media-policy"
+        iam_name: "{{ project_slug }}-s3-user"
+        iam_type: user
+        state: present
+        region: "{{ region }}"
+        policy_json: >
+          {
+              "Statement": [
+                  {
+                      "Action": [
+                          "s3:ListBucket",
+                          "s3:GetBucketLocation",
+                          "s3:ListBucketMultipartUploads",
+                          "s3:ListBucketVersions"
+                      ],
+                      "Effect": "Allow",
+                      "Resource": [
+                          "arn:aws:s3:::{{ project_slug }}-media-files"
+                      ]
+                  },
+                  {
+                      "Action": [
+                          "s3:*Object*",
+                          "s3:ListMultipartUploadParts",
+                          "s3:AbortMultipartUpload"
+                      ],
+                      "Effect": "Allow",
+                      "Resource": [
+                          "arn:aws:s3:::{{ project_slug }}-media-files/*"
+                      ]
+                  }
+              ],
+              "Version": "2012-10-17"
+          }
+
+
+
+    - name: Create RDS postgres instance
+      command: "aws rds create-db-instance
+        --db-instance-identifier {{ project_slug }}-database
+        --storage-type gp2
+        --allocated-storage {{ pg_fs_size }}
+        --db-instance-class {{ pg_instance_type }}
+        --engine postgres
+        --master-username {{ pg_username }}
+        --master-user-password {{ pg_password }}
+        --vpc-security-group-ids {{ rds_sg.group_id }}
+        --region {{ region }}
+        --availability-zone {{ az }}
+        --db-subnet-group-name {{ project_slug }}-rds-subnet-group
+        --auto-minor-version-upgrade
+        --no-multi-az
+        --no-publicly-accessible
+        --storage-encrypted"
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ lookup('env','AWS_ACCESS_KEY_ID') }}"
+        AWS_SECRET_ACCESS_KEY: "{{ lookup('env','AWS_SECRET_ACCESS_KEY') }}"
+        PYTHONPATH: "python3.5"
+      register: result
+      failed_when: >
+        result.rc != 0 and ('DBInstanceAlreadyExists' not in result.stderr)
+      changed_when: "result.rc == 0"
+
+    - rds:
+        command: facts
+        instance_name: "{{ project_slug }}-database"
+        region: "{{ region }}"
+      register: database
+      until: not(database.instance.endpoint is none)
+      retries: 20
+      delay: 45
+    - pause:
+        seconds: 5
+
+    - name: Create Datbase
+      postgresql_db:
+        login_host: "{{ database.instance.endpoint }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        name: intake
+
+    - name: Create Application User with DB access
+      postgresql_user:
+        login_host: "{{ database.instance.endpoint }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        db: intake
+        name: "{{ pg_app_username }}"
+        password: "{{ pg_app_password }}"
+        priv: "CONNECT"
+        role_attr_flags: NOSUPERUSER
+        no_password_changes: true
+
+    - name: Give Application User CREATE on database so they can make schemas
+      postgresql_privs:
+        login_host: "{{ database.instance.endpoint }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        db: intake
+        privs: CREATE
+        type: database
+        obj: intake
+        role: intake
+
+

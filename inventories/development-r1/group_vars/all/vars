@@ -1,0 +1,18 @@
+---
+project: "Project Name[stage name]"
+project_slug: cmr-rails-development-r1
+branch_name: develop
+hosted_zone: changeme
+domain: changeme
+region: us-east-1
+az: us-east-1a
+az2: us-east-1b
+pg_username: postgres
+pg_fs_size: 5
+pg_instance_type: db.t2.small
+pg_app_username: intake
+certificate_arn: ""
+base_path: /tmp
+
+environment_variables:
+  ALLOWED_HOSTS: "*"
