@@ -70,48 +70,7 @@
         ingress: [
             # rule no, protocol, allow/deny, cidr, icmp_code, icmp_type,
             #                                             port from, port to
-            [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
-        ]
-        egress: [
-            [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
-        ]
-        state: 'present'
-
-    - name: Create private subnet
-      ec2_vpc_subnet:
-        state: present
-        vpc_id: "{{ vpc.vpc.id }}"
-        region: "{{ region }}"
-        az: "{{ az }}"
-        cidr: 10.0.2.0/24
-        resource_tags:
-          Name: "{{ project_slug }}_subnet_private"
-          Type: "private"
-      register: "subnet_private"
-
-    - name: Create private subnet2
-      ec2_vpc_subnet:
-        state: present
-        vpc_id: "{{ vpc.vpc.id }}"
-        region: "{{ region }}"
-        az: "{{ az2 }}"
-        cidr: 10.0.3.0/24
-        resource_tags:
-          Name: "{{ project_slug }}_subnet_private2"
-          Type: "private"
-      register: "subnet_private2"
-
-    - name: Create  NACL for private subnets
-      ec2_vpc_nacl:
-        vpc_id: "{{ vpc.vpc.id }}"
-        name: "{{ project_slug }}-nacl-private"
-        region: "{{ region }}"
-        subnets: ["{{ project_slug }}_subnet_private", "{{ project_slug }}_subnet_private2"]
-
-        ingress: [
-            # rule no, protocol, allow/deny, cidr, icmp_code, icmp_type,
-            #                                             port from, port to
-            [100, 'all', 'deny', '0.0.0.0/0', null, null, null, null]
+            [100, '5432', 'deny', '0.0.0.0/0', null, null, null, null]
         ]
         egress: [
             [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
