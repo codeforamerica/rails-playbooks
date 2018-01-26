@@ -72,7 +72,7 @@
             [100, 'udp', 'allow', '0.0.0.0/0', null, null, 123, 123], # EB clocksync
             [200, 'tcp', 'allow', '0.0.0.0/0', null, null, 22, 22], # ssh
             [300, 'tcp', 'allow', '0.0.0.0/0', null, null, 80, 80], # http
-            [400, 'tcp', 'allow', '0.0.0.0/0', null, null, 443, 443] # https
+            [400, 'tcp', 'allow', '0.0.0.0/0', null, null, 443, 443], # https
         ]
         egress: [
             [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
@@ -191,32 +191,6 @@
             cidr_ip: 0.0.0.0/0
       register: "rds_sg"
 
-    - name: Create Webserver security group
-      ec2_group:
-        name: "{{ project_slug }}-ec2-security-group"
-        description: an example EC2 group
-        vpc_id: "{{ vpc.vpc.id }}"
-        region: "{{ region }}"
-        state: present
-        rules:
-          - proto: tcp
-            from_port: 22
-            to_port: 22
-            cidr_ip: 0.0.0.0/0
-          - proto: tcp
-            from_port: 80
-            to_port: 80
-            cidr_ip: 0.0.0.0/0
-          - proto: tcp
-            from_port: 443
-            to_port: 443
-            cidr_ip: 0.0.0.0/0
-          - proto: udp
-            from_port: 123
-            to_port: 123
-            cidr_ip: 0.0.0.0/0
-      register: "rds_sg"
-
     - name: Create RDS postgres instance
       command: "aws rds create-db-instance
         --db-instance-identifier {{ project_slug }}-database
@@ -243,28 +217,74 @@
         result.rc != 0 and ('DBInstanceAlreadyExists' not in result.stderr)
       changed_when: "result.rc == 0"
 
-  - name: Create Bastion
-    ec2:
-      region: "{{ region }}"
-      key_name: mykey
-      instance_type: t2.micro
-      image: ami-c87053b2
-      wait: no
-      group: "{{ project_slug }}-ec2-security-group"
-      vpc_subnet: "{{ subnet_public.subnet.id }}"
-      assign_public_ip: yes
-      instance_tags:
-        Name: "{{ project_slug }}-bastion"
+    - name: Create Webserver security group
+      ec2_group:
+        name: "{{ project_slug }}-ec2-security-group"
+        description: an example EC2 group
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        state: present
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 443
+            to_port: 443
+            cidr_ip: 0.0.0.0/0
+          - proto: udp
+            from_port: 123
+            to_port: 123
+            cidr_ip: 0.0.0.0/0
+      register: "ec2_sg"
 
-  - rds:
-      command: facts
-      instance_name: "{{ project_slug }}-database"
-      region: "{{ region }}"
-    register: database
-    until: not(database.instance.endpoint is none)
-    retries: 30
-    delay: 30
+    - name: Create Bastion
+      ec2:
+        region: "{{ region }}"
+        key_name: cmr-ansible-key
+        instance_type: t2.micro
+        image: ami-97785bed # amazon linux hvm/64bit consider: openvpn ami-97785bed
+        wait: no
+        group: "{{ project_slug }}-ec2-security-group"
+        vpc_subnet_id: "{{ subnet_public.subnet.id }}"
+        assign_public_ip: yes
+        exact_count: 1
+        count_tag:
+          Name: "{{ project_slug }}-bastion"
+        instance_tags:
+          Name: "{{ project_slug }}-bastion"
+      register: bastion_ec2
+    - name: Wait for DB to be up
+      rds:
+        command: facts
+        instance_name: "{{ project_slug }}-database"
+        region: "{{ region }}"
+      register: database
+      until: not(database.instance.endpoint is none)
+      retries: 180
+      delay: 10
 
+    - name: Wait for Bastian to be up
+      ec2_instance_facts:
+        instance_id: "{{ item.instance_id }}"
+        region: "{{ region }}"
+      register: bastion
+      until: bastion.state is 'running'
+      retries: 180
+      delay: 10
+      with_items: "{{ bastion_ec2.instances }}"
+
+    - name: RDS info
+      debug:
+        var=database
+    - name: Bastion info
+      debug:
+        var=bastion_ec2
 
 # These tasks work but the database isn't accessible
 # if we setup a bastion  Ansible can ssh in
