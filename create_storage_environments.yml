@@ -45,7 +45,7 @@
         state: present
       register: igw
 
-    - name: Set up public subnet route table
+    - name: Setup route table for public subnet
       ec2_vpc_route_table:
         vpc_id: "{{ vpc.vpc.id }}"
         region: "{{ region }}"
@@ -60,7 +60,7 @@
             gateway_id: "{{ igw.gateway_id }}"
       register: public_route_table
 
-    - name: Create  NACL for public subjects
+    - name: Create  NACL for public subnets
       ec2_vpc_nacl:
         vpc_id: "{{ vpc.vpc.id }}"
         name: "{{ project_slug }}-nacl-public"
@@ -101,6 +101,52 @@
           Type: "private"
       register: "subnet_private2"
 
+    - name: Create new NAT gateway in public subnet and allocate new EIP
+      ec2_vpc_nat_gateway:
+        state: present
+        subnet_id: "{{ subnet_public.subnet.id }}"
+        wait: yes
+        region: "{{ region }}"
+        if_exist_do_not_create: true
+      register: nat_gateway
+
+    - name: Create new NAT gateway in public subnet2 and allocate new EIP
+      ec2_vpc_nat_gateway:
+        state: present
+        subnet_id: "{{ subnet_public2.subnet.id }}"
+        wait: yes
+        region: "{{ region }}"
+        if_exist_do_not_create: true
+      register: nat_gateway2
+
+    - name: Setup route table for private subnet
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        tags:
+          Name: "{{ project_slug }}_private_route"
+        subnets:
+          - "{{ subnet_private.subnet.id }}"
+
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ nat_gateway.nat_gateway_id }}"
+      register: private_route_table
+
+    - name: Set up private subnet route table2
+      ec2_vpc_route_table:
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        tags:
+          Name: "{{ project_slug }}_private_route2"
+        subnets:
+          - "{{ subnet_private2.subnet.id }}"
+
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ nat_gateway2.nat_gateway_id }}"
+      register: private_route_table
+
     - name: Create  NACL for private subnets
       ec2_vpc_nacl:
         vpc_id: "{{ vpc.vpc.id }}"
@@ -118,7 +164,6 @@
         ]
         state: 'present'
 
-
     - name: Create RDS subnet group
       rds_subnet_group:
         region: "{{ region }}"
@@ -126,8 +171,8 @@
         name: "{{ project_slug }}-rds-subnet-group"
         description: "Database subnet for {{ project_slug }} instance of {{ project }}"
         subnets:
-          - "{{ subnet_public.subnet.id }}"
-          - "{{ subnet_public2.subnet.id }}"
+          - "{{ subnet_private.subnet.id }}"
+          - "{{ subnet_private2.subnet.id }}"
       register: "rds_subnet_group"
 
     - name: Create database security group
@@ -259,7 +304,6 @@
           }
 
 
-
     - name: Create RDS postgres instance
       command: "aws rds create-db-instance
         --db-instance-identifier {{ project_slug }}-database
@@ -297,34 +341,40 @@
     - pause:
         seconds: 5
 
-    - name: Create Datbase
-      postgresql_db:
-        login_host: "{{ database.instance.endpoint }}"
-        login_user: "{{ pg_username }}"
-        login_password: "{{ pg_password }}"
-        name: intake
 
-    - name: Create Application User with DB access
-      postgresql_user:
-        login_host: "{{ database.instance.endpoint }}"
-        login_user: "{{ pg_username }}"
-        login_password: "{{ pg_password }}"
-        db: intake
-        name: "{{ pg_app_username }}"
-        password: "{{ pg_app_password }}"
-        priv: "CONNECT"
-        role_attr_flags: NOSUPERUSER
-        no_password_changes: true
-
-    - name: Give Application User CREATE on database so they can make schemas
-      postgresql_privs:
-        login_host: "{{ database.instance.endpoint }}"
-        login_user: "{{ pg_username }}"
-        login_password: "{{ pg_password }}"
-        db: intake
-        privs: CREATE
-        type: database
-        obj: intake
-        role: intake
-
+# These tasks work but the database isn't accessible
+# if we setup a bastion  Ansible can ssh in
+# and acccess it from there.
+#
+#    - name: Create Datbase
+#      postgresql_db:
+#        login_host: "{{ database.instance.endpoint }}"
+#        login_user: "{{ pg_username }}"
+#        login_password: "{{ pg_password }}"
+#        name: intake
+#
+#    - name: Create Application User with DB access
+#      postgresql_user:
+#        login_host: "{{ database.instance.endpoint }}"
+#        login_user: "{{ pg_username }}"
+#        login_password: "{{ pg_password }}"
+#        db: intake
+#        name: "{{ pg_app_username }}"
+#        password: "{{ pg_app_password }}"
+#        priv: "CONNECT"
+#        role_attr_flags: NOSUPERUSER
+#        no_password_changes: true
+#
+#    - name: Give Application User CREATE on database so they can make schemas
+#      postgresql_privs:
+#        login_host: "{{ database.instance.endpoint }}"
+#        login_user: "{{ pg_username }}"
+#        login_password: "{{ pg_password }}"
+#        db: intake
+#        privs: CREATE
+#        type: database
+#        obj: intake
+#        role: intake
+#
+# Until its working we can do this manually from a beanstalk instance
 
