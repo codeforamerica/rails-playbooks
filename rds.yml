@@ -1,4 +1,5 @@
 ---
+- import_playbook: vpc.yml
 - hosts: localhost
   connection: local
   gather_facts: no
