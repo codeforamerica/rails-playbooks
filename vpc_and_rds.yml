@@ -68,9 +68,11 @@
         subnets: ["{{ project_slug }}_subnet_public", "{{ project_slug }}_subnet_public2"]
 
         ingress: [
-            # rule no, protocol, allow/deny, cidr, icmp_code, icmp_type,
-            #                                             port from, port to
-            [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
+            # rule no, protocol, allow/deny, cidr, icmp_code, icmp_type, port from, port to
+            [100, 'udp', 'allow', '0.0.0.0/0', null, null, 123, 123], # EB clocksync
+            [200, 'tcp', 'allow', '0.0.0.0/0', null, null, 22, 22], # ssh
+            [300, 'tcp', 'allow', '0.0.0.0/0', null, null, 80, 80], # http
+            [400, 'tcp', 'allow', '0.0.0.0/0', null, null, 443, 443] # https
         ]
         egress: [
             [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
@@ -189,120 +191,31 @@
             cidr_ip: 0.0.0.0/0
       register: "rds_sg"
 
-    - name: Create S3 bucket for application media
-      s3_bucket:
-        name: "{{ project_slug }}-media-files"
-        state: present
-        versioning: no
-
-    - name: Create S3 bucket for application static files
-      s3_bucket:
-        name: "{{ project_slug }}-static-files"
-        state: present
-        versioning: no
-        policy: >
-          {
-            "Version":"2012-10-17",
-            "Statement":[{
-              "Sid":"PublicReadGetObject",
-                  "Effect":"Allow",
-                "Principal": "*",
-                "Action":["s3:GetObject"],
-                "Resource":["arn:aws:s3:::{{ project_slug }}-static-files/*"
-                ]
-              }
-            ]
-          }
-
-    - name: Create S3 User for Application
-      iam:
-        iam_type: user
-        name: "{{ project_slug }}-s3-user"
-        state: present
-      register: s3_user
-
-    - name: Create S3 permission for application user on static bucket
-      iam_policy:
-        policy_name: "{{ project_slug }}-s3-static-policy"
-        iam_name: "{{ project_slug }}-s3-user"
-        iam_type: user
-        state: present
+    - name: Create Webserver security group
+      ec2_group:
+        name: "{{ project_slug }}-ec2-security-group"
+        description: an example EC2 group
+        vpc_id: "{{ vpc.vpc.id }}"
         region: "{{ region }}"
-        policy_json: >
-          {
-              "Statement": [
-                  {
-                      "Action": [
-                          "s3:ListBucket",
-                          "s3:GetBucketLocation",
-                          "s3:ListBucketMultipartUploads",
-                          "s3:ListBucketVersions"
-                      ],
-                      "Effect": "Allow",
-                      "Resource": [
-                          "arn:aws:s3:::{{ project_slug }}-static-files"
-                      ]
-                  },
-                  {
-                      "Action": [
-                          "s3:*Object*",
-                          "s3:ListMultipartUploadParts",
-                          "s3:AbortMultipartUpload"
-                      ],
-                      "Effect": "Allow",
-                      "Resource": [
-                          "arn:aws:s3:::{{ project_slug }}-static-files/*"
-                      ]
-                  }
-              ],
-              "Version": "2012-10-17"
-          }
-
-    - name: Set CORS on S3 bucket
-      command: >
-        aws s3api put-bucket-cors --bucket {{ project_slug }}-static-files  --cors-configuration '{ "CORSRules": [ { "AllowedHeaders": [ "Authorization" ], "AllowedMethods": [ "GET" ], "AllowedOrigins": [ "https://{{ domain }}" ], "MaxAgeSeconds": 3000 } ] }'
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ lookup('env','AWS_ACCESS_KEY_ID') }}"
-        AWS_SECRET_ACCESS_KEY: "{{ lookup('env','AWS_SECRET_ACCESS_KEY') }}"
-        PYTHONPATH: "python3.5"
-
-    - name: Create S3 permission for application user on media bucket
-      iam_policy:
-        policy_name: "{{ project_slug }}-s3-media-policy"
-        iam_name: "{{ project_slug }}-s3-user"
-        iam_type: user
         state: present
-        region: "{{ region }}"
-        policy_json: >
-          {
-              "Statement": [
-                  {
-                      "Action": [
-                          "s3:ListBucket",
-                          "s3:GetBucketLocation",
-                          "s3:ListBucketMultipartUploads",
-                          "s3:ListBucketVersions"
-                      ],
-                      "Effect": "Allow",
-                      "Resource": [
-                          "arn:aws:s3:::{{ project_slug }}-media-files"
-                      ]
-                  },
-                  {
-                      "Action": [
-                          "s3:*Object*",
-                          "s3:ListMultipartUploadParts",
-                          "s3:AbortMultipartUpload"
-                      ],
-                      "Effect": "Allow",
-                      "Resource": [
-                          "arn:aws:s3:::{{ project_slug }}-media-files/*"
-                      ]
-                  }
-              ],
-              "Version": "2012-10-17"
-          }
-
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 443
+            to_port: 443
+            cidr_ip: 0.0.0.0/0
+          - proto: udp
+            from_port: 123
+            to_port: 123
+            cidr_ip: 0.0.0.0/0
+      register: "rds_sg"
 
     - name: Create RDS postgres instance
       command: "aws rds create-db-instance
@@ -330,16 +243,27 @@
         result.rc != 0 and ('DBInstanceAlreadyExists' not in result.stderr)
       changed_when: "result.rc == 0"
 
-    - rds:
-        command: facts
-        instance_name: "{{ project_slug }}-database"
-        region: "{{ region }}"
-      register: database
-      until: not(database.instance.endpoint is none)
-      retries: 20
-      delay: 45
-    - pause:
-        seconds: 5
+  - name: Create Bastion
+    ec2:
+      region: "{{ region }}"
+      key_name: mykey
+      instance_type: t2.micro
+      image: ami-c87053b2
+      wait: no
+      group: "{{ project_slug }}-ec2-security-group"
+      vpc_subnet: "{{ subnet_public.subnet.id }}"
+      assign_public_ip: yes
+      instance_tags:
+        Name: "{{ project_slug }}-bastion"
+
+  - rds:
+      command: facts
+      instance_name: "{{ project_slug }}-database"
+      region: "{{ region }}"
+    register: database
+    until: not(database.instance.endpoint is none)
+    retries: 30
+    delay: 30
 
 
 # These tasks work but the database isn't accessible
