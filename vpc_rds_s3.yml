@@ -1,4 +1,3 @@
 - import_playbook: rds.yml
-- import_playbook: ec2.yml
 - import_playbook: s3.yml
 

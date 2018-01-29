@@ -11,7 +11,8 @@ az2: us-east-1b
 pg_username: postgres
 pg_fs_size: 5
 pg_instance_type: db.t2.small
-pg_app_username: intake
+pg_app_username: cmr
+db_name: cmr
 certificate_arn: ""
 base_path: /tmp
 

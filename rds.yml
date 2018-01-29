@@ -16,6 +16,46 @@
           - "{{ subnet_private2.subnet.id }}"
       register: "rds_subnet_group"
 
+    - name: Create Bastion security group
+      ec2_group:
+        name: "{{ project_slug }}-ec2-security-group"
+        description: an example EC2 group
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        state: present
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+      register: "ec2_sg"
+
+    - name: Elastic Beanstalk security group
+      ec2_group:
+        name: "{{ project_slug }}-eb-security-group"
+        description: an example EC2 group
+        vpc_id: "{{ vpc.vpc.id }}"
+        region: "{{ region }}"
+        state: present
+        rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            group_id: "{{ ec2_sg.group_id }}"
+          - proto: tcp
+            from_port: 80
+            to_port: 80
+            cidr_ip: 0.0.0.0/0
+          - proto: tcp
+            from_port: 443
+            to_port: 443
+            cidr_ip: 0.0.0.0/0
+          - proto: udp
+            from_port: 123
+            to_port: 123
+            cidr_ip: 0.0.0.0/0
+      register: "eb_sg"
+
     - name: Create database security group
       ec2_group:
         name: "{{ project_slug }}-rds-security-group"
@@ -27,7 +67,11 @@
           - proto: tcp
             from_port: 5432
             to_port: 5432
-            cidr_ip: 0.0.0.0/0
+            group_id: "{{ ec2_sg.group_id }}"
+          - proto: tcp
+            from_port: 5432
+            to_port: 5432
+            group_id: "{{ eb_sg.group_id }}"
       register: "rds_sg"
 
     - name: Create RDS postgres instance
@@ -56,40 +100,81 @@
         result.rc != 0 and ('DBInstanceAlreadyExists' not in result.stderr)
       changed_when: "result.rc == 0"
 
+    - name: Create Bastion
+      ec2:
+        region: "{{ region }}"
+        key_name: cmr-ansible-key
+        instance_type: t2.micro
+        image: ami-97785bed # amazon linux hvm/64bit consider: openvpn ami-97785bed
+        wait: no
+        group: "{{ project_slug }}-ec2-security-group"
+        vpc_subnet_id: "{{ subnet_public.subnet.id }}"
+        assign_public_ip: yes
+        exact_count: 1
+        count_tag:
+          Name: "{{ project_slug }}-bastion"
+        instance_tags:
+          Name: "{{ project_slug }}-bastion"
+      register: bastion_ec2
 
-# These tasks work but the database isn't accessible
-# if we setup a bastion  Ansible can ssh in
-# and acccess it from there.
-#
-#    - name: Create Datbase
-#      postgresql_db:
-#        login_host: "{{ database.instance.endpoint }}"
-#        login_user: "{{ pg_username }}"
-#        login_password: "{{ pg_password }}"
-#        name: intake
-#
-#    - name: Create Application User with DB access
-#      postgresql_user:
-#        login_host: "{{ database.instance.endpoint }}"
-#        login_user: "{{ pg_username }}"
-#        login_password: "{{ pg_password }}"
-#        db: intake
-#        name: "{{ pg_app_username }}"
-#        password: "{{ pg_app_password }}"
-#        priv: "CONNECT"
-#        role_attr_flags: NOSUPERUSER
-#        no_password_changes: true
-#
-#    - name: Give Application User CREATE on database so they can make schemas
-#      postgresql_privs:
-#        login_host: "{{ database.instance.endpoint }}"
-#        login_user: "{{ pg_username }}"
-#        login_password: "{{ pg_password }}"
-#        db: intake
-#        privs: CREATE
-#        type: database
-#        obj: intake
-#        role: intake
-#
-# Until its working we can do this manually from a beanstalk instance
+    - name: Create Test Server
+      ec2:
+        region: "{{ region }}"
+        key_name: cmr-ansible-key
+        instance_type: t2.micro
+        image: ami-97785bed # amazon linux hvm/64bit consider: openvpn ami-97785bed
+        wait: no
+        group: "{{ project_slug }}-ec2-security-group"
+        vpc_subnet_id: "{{ subnet_private.subnet.id }}"
+        assign_public_ip: yes
+        exact_count: 1
+        count_tag:
+          Name: "{{ project_slug }}-test-ec2"
+        instance_tags:
+          Name: "{{ project_slug }}-test-ec2"
+      register: test_ec2
+
+    - name: Wait for DB to be up
+      rds:
+        command: facts
+        instance_name: "{{ project_slug }}-database"
+        region: "{{ region }}"
+      register: database
+      until: not(database.instance.endpoint is none)
+      retries: 180
+      delay: 10
+
+    - name: Wait for Bastian to be up
+      ec2_instance_facts:
+        instance_ids:
+          - "{{ item.id }}"
+        region: "{{ region }}"
+      register: bastion
+      until: not(bastion.tagged_instances.0.public_dns_name is none)
+      retries: 180
+      delay: 10
+      with_items: "{{ bastion_ec2.tagged_instances }}"
+
+    - name: Wait for Test EC2 to be up
+      ec2_instance_facts:
+        instance_ids:
+          - "{{ item.id }}"
+        region: "{{ region }}"
+      register: test
+      until: not(test.tagged_instances.0.public_dns_name is none)
+      retries: 180
+      delay: 10
+      with_items: "{{ test_ec2.tagged_instances }}"
+
+    - name: Test info
+      debug:
+        var=test
+
+    - name: Bastion info
+      debug:
+        var=bastion
+
+    - name: RDS info
+      debug:
+        var=database
 
