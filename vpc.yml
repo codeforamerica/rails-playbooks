@@ -69,7 +69,9 @@
 
         ingress: [
             # rule no, protocol, allow/deny, cidr, icmp_code, icmp_type, port from, port to
-            [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
+            [100, 'tcp', 'allow', '0.0.0.0/0', null, null, 22, 22], # ssh
+            [200, 'all', 'allow', '0.0.0.0/0', null, null, 80, 80],
+            [300, 'all', 'allow', '0.0.0.0/0', null, null, 443, 443],
            # [100, 'udp', 'allow', '0.0.0.0/0', null, null, 123, 123], # EB clocksync
            # [200, 'tcp', 'allow', '0.0.0.0/0', null, null, 22, 22], # ssh
            # [300, 'tcp', 'allow', '0.0.0.0/0', null, null, 80, 80], # http
@@ -160,7 +162,10 @@
         ingress: [
             # rule no, protocol, allow/deny, cidr, icmp_code, icmp_type,
             #                                             port from, port to
-            [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]
+            [100, 'tcp', 'allow', '0.0.0.0/0', null, null, 22, 22], # ssh
+            [200, 'all', 'allow', '0.0.0.0/0', null, null, 80, 80],
+            [300, 'all', 'allow', '0.0.0.0/0', null, null, 443, 443],
+
         ]
         egress: [
             [100, 'all', 'allow', '0.0.0.0/0', null, null, null, null]

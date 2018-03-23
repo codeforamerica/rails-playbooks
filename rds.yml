@@ -124,7 +124,7 @@
         instance_type: t2.micro
         image: ami-97785bed # amazon linux hvm/64bit consider: openvpn ami-97785bed
         wait: no
-        group: "{{ project_slug }}-ec2-security-group"
+        group: "{{ project_slug }}-eb-security-group"
         vpc_subnet_id: "{{ subnet_private.subnet.id }}"
         assign_public_ip: yes
         exact_count: 1
